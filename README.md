@@ -14,6 +14,16 @@ Claude Code skills are instructions and scripts that Claude follows automaticall
 
 ## Install (once per machine)
 
+Get the files (either works):
+
+```
+git clone https://github.com/redlutoprint-svg/vet-skill
+```
+
+or download the zip from https://github.com/redlutoprint-svg/vet-skill/archive/refs/heads/master.zip and extract it. **Read the files before running the installer** — the same rule this tool exists to enforce applies to this tool.
+
+Then run:
+
 ```
 powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1
 ```
