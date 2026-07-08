@@ -105,7 +105,7 @@ try {
 } catch { $updateNotice = "update check skipped (offline or repo unreachable): $($_.Exception.Message)" }
 
 # --- Audit / weekly check ---
-$autoApproved = @()
+$safeVerdicts = @()
 $flagged = @()
 foreach ($k in $units.Keys) {
     if (-not $baselineMap.ContainsKey($k)) { $flagged += @{ name = $k; reason = 'NEW - never vetted' }; continue }
@@ -150,18 +150,17 @@ foreach ($f in $flagged) {
         if ($LASTEXITCODE -ne 0) {
             "judgment layer FAILED (claude exit $LASTEXITCODE) - review this unit manually" | Add-Content $report
         } elseif ($out -match '(?m)^\s*VERDICT_SAFE\s*$') {
-            $baselineMap[$f.name] = Get-DirHashes $dir
-            $autoApproved += $f.name
-            "AUTO-APPROVED: verdict SAFE - added to vetted baseline" | Add-Content $report
+            # No auto-approve: a human reads the report and approves explicitly.
+            $safeVerdicts += $f.name
         }
     } else { "claude CLI not on PATH - judgment layer skipped, review manually" | Add-Content $report }
 }
-if ($autoApproved.Count -or $removed.Count) { Save-BaselineMap $baselineMap }
-$remaining = $flagged.Count - $autoApproved.Count
-"`nAuto-approved: $($autoApproved.Count). If a remaining flagged unit checks out, mark it vetted: check-skills.ps1 -Approve <key>" | Add-Content $report
-if ($remaining -le 0) {
-    Write-Host "OK: $($autoApproved.Count) unit(s) audited and auto-approved. Report: $report"
-    exit 0
+if ($removed.Count) { Save-BaselineMap $baselineMap }
+"`nNothing was auto-approved - every flagged unit needs a human decision." | Add-Content $report
+if ($safeVerdicts.Count) {
+    "These received a SAFE verdict; if you agree after reading the findings above, approve each with:" | Add-Content $report
+    $checkScript = Join-Path $skillsDir 'vet-skill\check-skills.ps1'
+    foreach ($k in $safeVerdicts) { "  powershell -File `"$checkScript`" -Approve '$k'" | Add-Content $report }
 }
-Write-Host "ATTENTION: $remaining unit(s) need review ($($autoApproved.Count) auto-approved). Report: $report"
+Write-Host "ATTENTION: $($flagged.Count) unit(s) need review ($($safeVerdicts.Count) got SAFE verdicts - see report for approve commands). Report: $report"
 exit 1

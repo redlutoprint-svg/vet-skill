@@ -35,8 +35,9 @@ if ($pip) {
 
 # 3. Full audit - nothing is trusted blindly. Runs on first install AND on updates,
 # so newly covered surfaces (plugins, cowork skills) get audited immediately.
-# Every unvetted unit gets the scanner + Claude review; SAFE verdicts are auto-approved
-# into the baseline, anything else stays flagged for human review.
+# Every unvetted unit gets the scanner + Claude review. NOTHING is auto-approved:
+# the report lists ready-to-paste approve commands for units with SAFE verdicts,
+# and a human runs them after reading.
 $baseline = Join-Path $dest 'baseline.json'
 if (-not (Test-Path $baseline)) {
     # vet-skill itself is the trust anchor - you just reviewed and ran it
@@ -45,7 +46,7 @@ if (-not (Test-Path $baseline)) {
 if (Get-Command claude -ErrorAction SilentlyContinue) {
     Write-Host 'Auditing unvetted skills/plugins (scanner + Claude review per unit - first run can take a while)...'
     & (Join-Path $dest 'check-skills.ps1')
-    Write-Host 'Review the report for anything not auto-approved. To skip auditing and trust everything instead: check-skills.ps1 -Baseline'
+    Write-Host 'Read the report, then approve units you accept (approve commands are listed in it). To skip auditing and trust everything instead: check-skills.ps1 -Baseline'
 } else {
     Write-Warning 'claude CLI not found - existing skills are NOT vetted. Ask Claude to "audit my skills" in a Claude Code session, then approve them, or run: check-skills.ps1 -Baseline to trust them as-is.'
 }
