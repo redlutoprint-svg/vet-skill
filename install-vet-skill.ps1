@@ -1,4 +1,5 @@
-# Installs the vet-skill Claude Code skill and the Cisco skill-scanner CLI.
+# Installs the vet-skill Claude Code skill, the Cisco skill-scanner CLI,
+# the unvetted-skill guard hook, and the weekly drift-check scheduled task.
 # Run from anywhere: right-click > Run with PowerShell, or:
 #   powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1
 $ErrorActionPreference = 'Stop'
@@ -9,7 +10,7 @@ if ($PSScriptRoot -ieq $dest) {
     Write-Host "Already running from $dest - skill is in place."
 } else {
     New-Item -ItemType Directory -Force $dest | Out-Null
-    Copy-Item (Join-Path $PSScriptRoot 'SKILL.md') $dest -Force
+    Copy-Item (Join-Path $PSScriptRoot 'SKILL.md'), (Join-Path $PSScriptRoot 'check-skills.ps1'), (Join-Path $PSScriptRoot 'guard-skills.ps1') $dest -Force
     Write-Host "Skill installed to $dest"
 }
 
@@ -31,6 +32,42 @@ if ($pip) {
     Write-Warning 'pip not found. Install Python 3.10+ from python.org, then run: pip install cisco-ai-skill-scanner'
     Write-Warning 'The skill still works without it - Claude falls back to manual review.'
 }
+
+# 3. Baseline: treat skills already on this machine as trusted
+$baseline = Join-Path $dest 'baseline.json'
+if (-not (Test-Path $baseline)) {
+    & (Join-Path $dest 'check-skills.ps1') -Baseline
+    Write-Warning 'Existing skills were baselined as trusted. If unsure about any of them, ask Claude to audit your skills.'
+}
+
+# 4. Guard hook: block Claude from writing into unvetted skill folders
+$settingsFile = Join-Path $HOME '.claude\settings.json'
+$hookCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$dest\guard-skills.ps1`""
+$settings = if (Test-Path $settingsFile) { Get-Content $settingsFile -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
+$alreadyHooked = $false
+if ($settings.hooks -and $settings.hooks.PreToolUse) {
+    foreach ($entry in $settings.hooks.PreToolUse) {
+        foreach ($h in $entry.hooks) { if ($h.command -like '*guard-skills.ps1*') { $alreadyHooked = $true } }
+    }
+}
+if ($alreadyHooked) {
+    Write-Host 'Guard hook already configured.'
+} else {
+    if (Test-Path $settingsFile) { Copy-Item $settingsFile "$settingsFile.bak" -Force }
+    $hookEntry = [pscustomobject]@{
+        matcher = 'Write|Edit'
+        hooks   = @([pscustomobject]@{ type = 'command'; command = $hookCmd; timeout = 15; statusMessage = 'Checking vetted-skill baseline' })
+    }
+    if (-not $settings.hooks) { $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) }
+    if (-not $settings.hooks.PreToolUse) { $settings.hooks | Add-Member -NotePropertyName PreToolUse -NotePropertyValue @() }
+    $settings.hooks.PreToolUse = @($settings.hooks.PreToolUse) + $hookEntry
+    $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsFile -Encoding utf8
+    Write-Host "Guard hook added to $settingsFile (backup at $settingsFile.bak). Restart Claude Code sessions to activate."
+}
+
+# 5. Weekly drift check: flags skills installed or changed without vetting
+schtasks /Create /TN "vet-skill-weekly-check" /TR "powershell -NoProfile -ExecutionPolicy Bypass -File \`"$dest\check-skills.ps1\`"" /SC WEEKLY /D MON /ST 09:00 /F | Out-Null
+Write-Host 'Weekly drift check scheduled (Mondays 9:00). Reports land in skills\vet-skill\reports\.'
 
 Write-Host ''
 Write-Host 'Done. In Claude Code, vet any skill BEFORE installing it with:'

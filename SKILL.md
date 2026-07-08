@@ -44,7 +44,10 @@ Audit a skill package before installation. Input: a local directory path, or a U
 
 7. **Report.** Verdict first, then a table of findings (file:line, category, quote, why it matters), then the domain list. A skill with zero network calls, zero scripts, and no injection language is **SAFE**. Legitimate-looking network use (e.g. a docs-lookup skill hitting its own API) is **CAUTION** — name exactly what it contacts and what it sends. Anything in download-and-execute, exfiltration, or injection categories is **DO NOT INSTALL**.
 
-8. Only install (copy into `~/.claude/skills/`) if the user explicitly says to after seeing the report.
+8. Only install (copy into `~/.claude/skills/`) if the user explicitly says to after seeing the report. After installing an approved skill, record it as vetted so the guard hook and weekly drift check accept it:
+   ```
+   powershell -File ~\.claude\skills\vet-skill\check-skills.ps1 -Approve <skill-name>
+   ```
 
 ## Notes
 

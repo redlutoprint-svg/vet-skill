@@ -9,7 +9,9 @@ Claude Code skills are instructions and scripts that Claude follows automaticall
 | File | Purpose |
 |---|---|
 | `SKILL.md` | The vet-skill itself — instructions Claude follows to audit another skill |
-| `install-vet-skill.ps1` | One-time installer (Windows) |
+| `guard-skills.ps1` | Hook script — blocks Claude from writing into unvetted skill folders |
+| `check-skills.ps1` | Baseline + weekly drift check — flags skills installed or changed without vetting |
+| `install-vet-skill.ps1` | One-time installer (Windows): skill, scanner, hook, weekly task |
 | `README.md` | This file |
 
 ## Install (once per machine)
@@ -56,6 +58,20 @@ Claude then:
    - **CAUTION** — has network access or scripts that look legitimate. The report names exactly what it contacts and what it sends; you decide.
    - **DO NOT INSTALL** — download-and-execute, exfiltration, hidden Unicode, unreviewable binaries, or injection language found.
 8. **Installs only if you explicitly say so** after reading the report.
+
+## Automatic protection
+
+The installer sets up two enforcement layers beyond the manual `/vet-skill` command:
+
+**Guard hook (blocks at install time).** A Claude Code PreToolUse hook intercepts any attempt by Claude to write files into a skill folder that isn't in the vetted baseline (`baseline.json`). The write is blocked with instructions to run `/vet-skill` first. After a skill passes vetting and you approve it, it's recorded with:
+
+```
+powershell -File check-skills.ps1 -Approve <skill-name>
+```
+
+**Weekly drift check (catches everything else).** The hook only sees installs that go through Claude Code — someone hand-copying a folder or running `git clone` in a terminal bypasses it. So a scheduled task (Mondays 9:00) re-hashes every skill and compares against the baseline. Any skill that is NEW (never vetted) or CHANGED (modified since vetting) automatically gets the full check: a Cisco scanner pass plus a headless Claude review, written to `reports\`. If the headless Claude call can't authenticate, the report says so — review that skill manually.
+
+**Why both layers matter:** in testing, the Cisco scanner rated a skill containing a literal `curl | bash` payload instruction as SAFE — pattern scanners miss attacks written as plain English. The Claude judgment layer is not optional.
 
 ## Team rule
 
