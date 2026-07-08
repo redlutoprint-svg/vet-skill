@@ -33,11 +33,20 @@ if ($pip) {
     Write-Warning 'The skill still works without it - Claude falls back to manual review.'
 }
 
-# 3. Baseline: treat skills already on this machine as trusted
+# 3. Full audit of skills already on this machine - nothing is trusted blindly.
+# Every existing skill gets the scanner + Claude review; SAFE verdicts are auto-approved
+# into the baseline, anything else stays flagged for human review.
 $baseline = Join-Path $dest 'baseline.json'
 if (-not (Test-Path $baseline)) {
-    & (Join-Path $dest 'check-skills.ps1') -Baseline
-    Write-Warning 'Existing skills were baselined as trusted. If unsure about any of them, ask Claude to audit your skills.'
+    # vet-skill itself is the trust anchor - you just reviewed and ran it
+    & (Join-Path $dest 'check-skills.ps1') -Approve vet-skill
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Host 'Auditing existing skills (scanner + Claude review per skill - this can take a while)...'
+        & (Join-Path $dest 'check-skills.ps1')
+        Write-Host 'Review the report for anything not auto-approved. To skip auditing and trust everything instead: check-skills.ps1 -Baseline'
+    } else {
+        Write-Warning 'claude CLI not found - existing skills are NOT vetted. Ask Claude to "audit my skills" in a Claude Code session, then approve them, or run: check-skills.ps1 -Baseline to trust them as-is.'
+    }
 }
 
 # 4. Guard hook: block Claude from writing into unvetted skill folders

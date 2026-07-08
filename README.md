@@ -30,9 +30,11 @@ Then run:
 powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1
 ```
 
-This does two things:
+The installer sets up the whole system:
 1. Copies the skill into your `~\.claude\skills\` folder so Claude Code can use it.
 2. Installs the Cisco AI Defense `skill-scanner` (`pip install cisco-ai-skill-scanner`, requires Python 3.10+). If you don't have Python, the skill still works — Claude just does the review without the automated scanner layer.
+3. **Audits every skill already on your machine** — nothing is trusted blindly. Each existing skill gets the scanner pass plus a headless Claude review; SAFE verdicts are auto-approved into the vetted baseline, anything rated CAUTION or worse stays flagged in the report for you to review. This takes a few minutes and requires a logged-in `claude` CLI (run `claude`, then `/login`, if you get 401 errors). To skip the audit and trust everything as-is: `check-skills.ps1 -Baseline`.
+4. Adds the guard hook to your Claude Code settings (backup saved first) and schedules the weekly drift check.
 
 Mac/Linux: copy this folder into `~/.claude/skills/` manually and run `pip install cisco-ai-skill-scanner`.
 
@@ -69,7 +71,7 @@ The installer sets up two enforcement layers beyond the manual `/vet-skill` comm
 powershell -File check-skills.ps1 -Approve <skill-name>
 ```
 
-**Weekly drift check (catches everything else).** The hook only sees installs that go through Claude Code — someone hand-copying a folder or running `git clone` in a terminal bypasses it. So a scheduled task (Mondays 9:00) re-hashes every skill and compares against the baseline. Any skill that is NEW (never vetted) or CHANGED (modified since vetting) automatically gets the full check: a Cisco scanner pass plus a headless Claude review, written to `reports\`. If the headless Claude call can't authenticate, the report says so — review that skill manually.
+**Weekly drift check (catches everything else).** The hook only sees installs that go through Claude Code — someone hand-copying a folder or running `git clone` in a terminal bypasses it. So a scheduled task (Mondays 9:00) re-hashes every skill and compares against the baseline. Any skill that is NEW (never vetted) or CHANGED (modified since vetting) automatically gets the full check: a Cisco scanner pass plus a headless Claude review, written to `reports\`. A SAFE verdict is auto-approved into the baseline; CAUTION or DO NOT INSTALL stays flagged for a human. Skills deleted from disk are reported once and pruned. If the headless Claude call can't authenticate, the report says so — review that skill manually and re-login (`claude`, then `/login`).
 
 **Why both layers matter:** in testing, the Cisco scanner rated a skill containing a literal `curl | bash` payload instruction as SAFE — pattern scanners miss attacks written as plain English. The Claude judgment layer is not optional.
 
