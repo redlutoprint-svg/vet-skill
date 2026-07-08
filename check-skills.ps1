@@ -56,6 +56,21 @@ if ($Approve) {
     exit 0
 }
 
+# --- Update notice: compare local tooling against the GitHub repo (read-only, never auto-applies) ---
+$updateNotice = $null
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $repoRaw = 'https://raw.githubusercontent.com/redlutoprint-svg/vet-skill/master'
+    foreach ($f in 'SKILL.md', 'check-skills.ps1', 'guard-skills.ps1', 'install-vet-skill.ps1', 'README.md') {
+        $remote = (Invoke-WebRequest "$repoRaw/$f" -UseBasicParsing -TimeoutSec 15).Content -replace "`r`n", "`n"
+        $local = (Get-Content (Join-Path $skillsDir "vet-skill\$f") -Raw -Encoding UTF8) -replace "`r`n", "`n"
+        if ($remote.TrimEnd("`n") -ne $local.TrimEnd("`n")) {
+            $updateNotice = "UPDATE AVAILABLE: vet-skill '$f' differs from the repo. Re-run the installer from a fresh clone of https://github.com/redlutoprint-svg/vet-skill"
+            break
+        }
+    }
+} catch { $updateNotice = "update check skipped (offline or repo unreachable): $($_.Exception.Message)" }
+
 # --- Audit / weekly check ---
 $autoApproved = @()
 $flagged = @()
@@ -75,6 +90,7 @@ $stamp = Get-Date -Format 'yyyy-MM-dd_HHmm'
 $report = Join-Path $reportDir "check_$stamp.txt"
 
 "vet-skill drift check - $(Get-Date)" | Set-Content $report -Encoding utf8
+if ($updateNotice) { $updateNotice | Add-Content $report; Write-Host $updateNotice }
 if (-not $flagged.Count -and -not $removed.Count) {
     "OK: all $($skillNames.Count) skills match the vetted baseline." | Add-Content $report
     Write-Host "OK: all skills match baseline."
