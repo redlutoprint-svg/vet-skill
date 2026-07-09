@@ -7,11 +7,16 @@
 #   check-skills.ps1                  weekly check - flags NEW/CHANGED units, runs full check on them
 #   check-skills.ps1 -Approve <key>   record a unit as vetted (e.g. my-skill, plugin:mp/name/1.0, cowork:docx)
 #   check-skills.ps1 -Baseline        snapshot ALL current units as vetted (escape hatch - trusts everything)
+# NOTE: this script does not vet ITSELF - that is verify-vet-skill.ps1's job, which
+# lives outside the repo ($env:LOCALAPPDATA\vet-skill-trust) and gates every entry
+# point. If vet-skill's own files drift, this script halts instead of scanning,
+# because its own pipeline can no longer be trusted.
 param([string]$Approve, [switch]$Baseline)
 $ErrorActionPreference = 'Stop'
 
 $skillsDir = Join-Path $HOME '.claude\skills'
 $baselineFile = Join-Path $skillsDir 'vet-skill\baseline.json'
+$selfVerifier = Join-Path $env:LOCALAPPDATA 'vet-skill-trust\verify-vet-skill.ps1'
 
 function Get-DirHashes($dir) {
     $hashes = @{}
@@ -78,10 +83,14 @@ if ($Baseline) {
     foreach ($k in $units.Keys) { $map[$k] = Get-DirHashes $units[$k] }
     Save-BaselineMap $map
     Write-Host "Baseline recorded for $($units.Count) units."
+    Write-Host "Note: vet-skill's OWN trust is pinned separately, outside the repo - if its files changed, also run: powershell -File `"$selfVerifier`" -ApproveSelf"
     exit 0
 }
 
 if ($Approve) {
+    if ($Approve -eq 'vet-skill') {
+        Write-Error "vet-skill cannot approve itself through its own checker (a compromised update could self-certify). Its trust anchor lives outside the repo - after reviewing the change, run: powershell -File `"$selfVerifier`" -ApproveSelf"
+    }
     if (-not $units.ContainsKey($Approve)) { Write-Error "No such unit: $Approve (keys look like: my-skill, plugin:mp/name/1.0, cowork:docx)" }
     $baselineMap[$Approve] = Get-DirHashes $units[$Approve]
     Save-BaselineMap $baselineMap
@@ -94,11 +103,15 @@ $updateNotice = $null
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $repoRaw = 'https://raw.githubusercontent.com/redlutoprint-svg/vet-skill/master'
-    foreach ($f in 'SKILL.md', 'check-skills.ps1', 'guard-skills.ps1', 'install-vet-skill.ps1', 'README.md') {
+    foreach ($f in 'SKILL.md', 'check-skills.ps1', 'guard-skills.ps1', 'install-vet-skill.ps1', 'verify-vet-skill.ps1', 'README.md') {
+        $localPath = Join-Path $skillsDir "vet-skill\$f"
+        if (-not (Test-Path $localPath)) { continue }  # missing files are the drift check's job, not the update notice's
         $remote = (Invoke-WebRequest "$repoRaw/$f" -UseBasicParsing -TimeoutSec 15).Content -replace "`r`n", "`n"
-        $local = (Get-Content (Join-Path $skillsDir "vet-skill\$f") -Raw -Encoding UTF8) -replace "`r`n", "`n"
+        $local = (Get-Content $localPath -Raw -Encoding UTF8) -replace "`r`n", "`n"
         if ($remote.TrimEnd("`n") -ne $local.TrimEnd("`n")) {
-            $updateNotice = "UPDATE AVAILABLE: vet-skill '$f' differs from the repo. Re-run the installer from a fresh clone of https://github.com/redlutoprint-svg/vet-skill"
+            # Deliberately does NOT say "re-run the installer": if the repo is compromised,
+            # that advice installs the compromise. Updates are pinned to a reviewed commit.
+            $updateNotice = "UPDATE AVAILABLE: vet-skill '$f' differs from the GitHub repo. Do NOT blindly pull or re-run the installer - the repo could be compromised. Read the diff on GitHub first, then: git clone the repo, confirm 'git rev-parse HEAD' equals the commit you reviewed, and run install-vet-skill.ps1 -AllowUpdate <that sha>."
             break
         }
     }
@@ -128,6 +141,22 @@ if (-not $flagged.Count -and -not $removed.Count) {
     "OK: all $($units.Count) units match the vetted baseline." | Add-Content $report
     Write-Host "OK: all $($units.Count) units match baseline."
     exit 0
+}
+
+# --- Self-check halt: if vet-skill's OWN files drifted, this very pipeline (scanner
+# invocation, headless Claude call, report writing) may be what changed - running it
+# could launder a compromise into a SAFE verdict. Flag for manual review and stop.
+$selfDrift = @($flagged | Where-Object { $_.name -eq 'vet-skill' })
+if ($selfDrift.Count) {
+    $msg = "SELF-CHECK FAILED: vet-skill's own files changed since approval ($($selfDrift[0].reason)). The scan pipeline itself may be compromised - NO automated scan will run this pass."
+    "!!! $msg" | Add-Content $report
+    "Resolve from OUTSIDE the repo first: powershell -File `"$selfVerifier`"  (shows the diff vs the pinned known-good copies; then -Restore to roll back, or -ApproveSelf if you made the change)" | Add-Content $report
+    foreach ($f in $flagged | Where-Object { $_.name -ne 'vet-skill' }) {
+        "FLAGGED (scan deferred until the self-check passes): $($f.name) - $($f.reason)" | Add-Content $report
+    }
+    Write-Host "!!! $msg"
+    Write-Host "Run: powershell -File `"$selfVerifier`" - report: $report"
+    exit 1
 }
 
 foreach ($r in $removed) { "REMOVED: $r (was baselined, folder gone - pruned from baseline)" | Add-Content $report; $baselineMap.Remove($r) }
