@@ -167,7 +167,19 @@ foreach ($f in $flagged) {
     $scanner = Get-Command skill-scanner -ErrorAction SilentlyContinue
     if ($scanner) {
         "--- skill-scanner: $($f.name) ---" | Add-Content $report
-        & skill-scanner scan $dir | Out-String | Add-Content $report
+        # Capture into a variable first (like the claude layer below) instead of piping the
+        # live native-command stream straight into Add-Content - skill-scanner (via LiteLLM)
+        # touches the console/stderr, and piping it directly throws "Stream was not readable"
+        # mid-run, which aborts the whole drift check and leaves a header-only report. 2>&1
+        # folds stderr (e.g. LiteLLM SSL/cost-map warnings) into the report; the try/catch keeps
+        # a scanner failure from taking down the rest of the pass.
+        try {
+            $scanOut = & skill-scanner scan $dir 2>&1 | Out-String
+            if ([string]::IsNullOrWhiteSpace($scanOut)) { $scanOut = "(skill-scanner produced no output)" }
+            $scanOut | Add-Content $report
+        } catch {
+            "skill-scanner layer FAILED to run: $($_.Exception.Message) - review this unit manually" | Add-Content $report
+        }
     } else { "skill-scanner not on PATH - scanner layer skipped" | Add-Content $report }
     # Full check layer 2: headless Claude vet (judgment layer). Read-only tools only.
     $claude = Get-Command claude -ErrorAction SilentlyContinue
