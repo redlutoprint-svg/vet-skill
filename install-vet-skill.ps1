@@ -137,8 +137,15 @@ if ($alreadyHooked -and -not $removedLegacy) {
 # 7. Weekly drift check: flags skills installed or changed without vetting. Also routed
 # through the verifier - if vet-skill's own files drifted, the check does NOT run and
 # an alarm (with a diff against the known-good copies) is written instead.
-schtasks /Create /TN "vet-skill-weekly-check" /TR "powershell -NoProfile -ExecutionPolicy Bypass -File \`"$verifier\`" -Task" /SC WEEKLY /D MON /ST 09:00 /F | Out-Null
-Write-Host 'Weekly drift check scheduled (Mondays 9:00), gated by the integrity verifier. Reports land in skills\vet-skill\reports\, alarms in the trust folder.'
+# -StartWhenAvailable is why we use Register-ScheduledTask instead of schtasks: without it
+# a run missed because the machine was off/asleep at 09:00 Monday is silently skipped until
+# the NEXT Monday. With it, the missed run fires shortly after the machine is next available.
+$taskArgs     = "-NoProfile -ExecutionPolicy Bypass -File `"$verifier`" -Task"
+$taskAction   = New-ScheduledTaskAction -Execute 'powershell' -Argument $taskArgs
+$taskTrigger  = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At '09:00'
+$taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName 'vet-skill-weekly-check' -Action $taskAction -Trigger $taskTrigger -Settings $taskSettings -Force | Out-Null
+Write-Host 'Weekly drift check scheduled (Mondays 9:00; a run missed while the machine was off runs at next startup), gated by the integrity verifier. Reports land in skills\vet-skill\reports\, alarms in the trust folder.'
 
 Write-Host ''
 Write-Host 'Done. In Claude Code, vet any skill BEFORE installing it with:'
