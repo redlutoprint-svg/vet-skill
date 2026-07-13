@@ -16,7 +16,7 @@ $skillName = ($normalized.Substring($skillsDir.Length + 1) -split '\\')[0]
 if (-not $skillName) { exit 0 }
 
 if ($skillName -eq 'vet-skill') {
-    [Console]::Error.WriteLine("BLOCKED: vet-skill's own folder is locked against agent edits. Legitimate updates go through the pinned installer (install-vet-skill.ps1 -AllowUpdate <reviewed commit sha>), then the user re-pins with verify-vet-skill.ps1 -ApproveSelf.")
+    [Console]::Error.WriteLine("BLOCKED: vet-skill's own folder is locked against agent edits. Legitimate updates go through the installer (install-vet-skill.ps1 -Update fetches from GitHub over HTTPS; no git needed), then the user reviews the changes and re-pins by typing APPROVE.")
     exit 2
 }
 

@@ -12,7 +12,7 @@ Claude Code skills are instructions and scripts that Claude follows automaticall
 | `guard-skills.ps1` | Hook script — blocks Claude from writing into unvetted skill folders |
 | `check-skills.ps1` | Baseline + weekly drift check — flags skills installed or changed without vetting |
 | `verify-vet-skill.ps1` | Integrity gate for vet-skill ITSELF — installed outside the repo, checks every vet-skill file against an out-of-repo pinned baseline before any other script runs |
-| `install-vet-skill.ps1` | Installer (Windows): skill, scanner, hook, weekly task, trust anchor. Re-runs refuse to update unless pinned to a reviewed commit |
+| `install-vet-skill.ps1` | Installer (Windows): skill, scanner, hook, weekly task, trust anchor. `-Update` fetches the latest files from GitHub over HTTPS (no git needed); you review the changes and type APPROVE to re-pin |
 | `README.md` | This file |
 
 ## Install (once per machine)
@@ -38,7 +38,7 @@ The installer sets up the whole system:
 4. **Audits every skill already on your machine** — nothing is trusted blindly, and nothing is auto-approved. Each existing skill gets the scanner pass plus a headless Claude review; the report lists ready-to-paste approve commands for units that received a SAFE verdict, and YOU run them after reading. Anything rated CAUTION or worse deserves a closer look before approving. The audit takes a few minutes and requires a logged-in `claude` CLI (run `claude`, then `/login`, if you get 401 errors). To skip the audit and trust everything as-is: `check-skills.ps1 -Baseline`.
 5. Adds the guard hook to your Claude Code settings (backup saved first) and schedules the weekly drift check (Mondays 9:00; if the machine is off at that time, the check runs at the next startup instead of waiting a full week) — both routed through the integrity verifier.
 
-**Re-running the installer does NOT update an existing install.** Updates must be pinned to a commit you reviewed — see "Updating vet-skill" below. (A zip download works for the *first* install; updates require a git clone, because a zip can't prove which commit it contains.)
+**Re-running the installer bare does NOT update an existing install** — a casual re-run can't silently replace vetted files. To update, pass `-Update`: the installer fetches the latest files from GitHub over HTTPS (no git needed — same as the first-install zip download), shows you what changed, and installs them only after you type APPROVE. See "Updating vet-skill" below.
 
 Mac/Linux: copy this folder into `~/.claude/skills/` manually and run `pip install cisco-ai-skill-scanner`.
 
@@ -95,14 +95,16 @@ Both `-ApproveSelf` and `-Restore` require typing a confirmation word at an inte
 
 ### Updating vet-skill after a legitimate new release
 
-0. **Check what's on this machine first:** `powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1 -Status`. This read-only command reports whether the skill is installed, whether the out-of-repo trust anchor exists, and whether the guard hook is the current (verifier-routed) or a legacy (direct `guard-skills.ps1`) one. Use it instead of guessing install state from the file layout — the layout changed across versions, so eyeballing it can wrongly conclude vet-skill isn't installed. An older install (no trust anchor, legacy hook) still updates correctly with the steps below.
-1. See what's pinned: `powershell -File "$env:LOCALAPPDATA\vet-skill-trust\verify-vet-skill.ps1"` prints the approved commit.
-2. **Read the diff on GitHub** between that commit and the new one. This is the actual review — nothing downstream substitutes for it.
-3. Clone fresh and confirm you have exactly what you reviewed: `git clone https://github.com/redlutoprint-svg/vet-skill && git -C vet-skill rev-parse HEAD`.
-4. Run the pinned update: `powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1 -AllowUpdate <that full sha>`. The installer refuses if the checkout's HEAD doesn't match the flag or the working tree is dirty.
-5. Type `APPROVE` at the prompt — this re-pins the hashes and known-good copies in the trust folder.
+The simple path — no git, no clone to manage:
 
-If the weekly check prints an `UPDATE AVAILABLE` notice, it deliberately does **not** tell you to re-run the installer — if the repo is compromised, that advice would install the compromise. Follow the steps above instead.
+0. **Check what's on this machine first:** `powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1 -Status`. This read-only command reports whether the skill is installed, whether the out-of-repo trust anchor exists, and whether the guard hook is the current (verifier-routed) or a legacy (direct `guard-skills.ps1`) one. Use it instead of guessing install state from the file layout — the layout changed across versions, so eyeballing it can wrongly conclude vet-skill isn't installed. An older install (no trust anchor, legacy hook) still updates correctly.
+1. **Read the diff on GitHub** for what's changed since your pinned version: <https://github.com/redlutoprint-svg/vet-skill/commits/master>. This is the actual review — nothing downstream substitutes for it. (`powershell -File "$env:LOCALAPPDATA\vet-skill-trust\verify-vet-skill.ps1"` prints your currently-pinned commit to diff against.)
+2. Run `powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1 -Update`. It fetches the latest files from GitHub over HTTPS (**no git needed**), lists exactly which files changed vs. your installed copy, and installs them. Add `-Ref <sha|tag>` to fetch a specific version instead of latest `master`.
+3. Type `APPROVE` at the prompt — this re-pins the hashes and known-good copies in the trust folder. **This is the verification that trusts nobody:** a compromised GitHub fetch still has to get past your review here before it's pinned. The residual risk is only "the repo is compromised *and* you approve it anyway."
+
+**The stronger path (optional, needs git installed):** if you want the installed bytes cryptographically tied to a specific public commit, clone fresh (`git clone https://github.com/redlutoprint-svg/vet-skill`), confirm `git rev-parse HEAD` is the commit you reviewed, and run `install-vet-skill.ps1 -AllowUpdate <that full sha>` — it refuses unless the checkout's HEAD matches and the tree is clean. Then type APPROVE.
+
+If the weekly check prints an `UPDATE AVAILABLE` notice, it deliberately does **not** auto-update — if the repo is compromised, that advice would install the compromise. Follow the steps above (read the diff, then APPROVE) instead.
 
 ### If the alarm fires and you didn't change anything
 
@@ -118,7 +120,7 @@ The tooling only protects you if it runs *before* the install. The main attack v
 
 This is a strong filter, not a guarantee. A sufficiently clever injection can read as innocent English. Treat CAUTION verdicts seriously, prefer skills from known publishers, and when in doubt, don't install.
 
-**Closed gap — a hacked vet-skill repo.** Earlier versions had no defense against a compromised update to vet-skill itself: a malicious `check-skills.ps1` could self-certify as SAFE. That's now covered by the self-protection layer above — out-of-repo trust anchor, verifier-gated execution, hard-locked skill folder, and commit-pinned updates. To re-approve after a legitimate update, follow "Updating vet-skill after a legitimate new release."
+**Closed gap — a hacked vet-skill repo.** Earlier versions had no defense against a compromised update to vet-skill itself: a malicious `check-skills.ps1` could self-certify as SAFE. That's now covered by the self-protection layer above — out-of-repo trust anchor, verifier-gated execution, hard-locked skill folder, and a human `APPROVE` on every update. The `APPROVE` is what closes it: an update (however it's fetched — the `-Update` HTTPS pull or a git clone) is pinned only after you review the changed files and approve them, so a poisoned upstream can't self-install. To re-approve after a legitimate update, follow "Updating vet-skill after a legitimate new release."
 
 Still open, stated honestly:
 
