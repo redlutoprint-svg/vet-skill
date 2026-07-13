@@ -5,13 +5,56 @@
 #   powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1
 # Updates REFUSE to run unless pinned to the exact commit you reviewed:
 #   powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1 -AllowUpdate <full 40-char sha>
-param([string]$AllowUpdate)
+# Check what is installed on this machine WITHOUT changing anything (safe for an agent to run):
+#   powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1 -Status
+param([string]$AllowUpdate, [switch]$Status)
 $ErrorActionPreference = 'Stop'
 
 $dest = Join-Path $HOME '.claude\skills\vet-skill'
 $trustDir = Join-Path $env:LOCALAPPDATA 'vet-skill-trust'
 $verifier = Join-Path $trustDir 'verify-vet-skill.ps1'
 $files = 'SKILL.md', 'check-skills.ps1', 'guard-skills.ps1', 'install-vet-skill.ps1', 'verify-vet-skill.ps1', 'README.md'
+
+# -Status: read-only report of what is installed here. Changes nothing, prompts for nothing, so
+# an agent can run it safely. Use it INSTEAD of eyeballing the file layout to decide whether
+# vet-skill is installed - the layout changed across versions (older installs have no trust
+# anchor and a direct guard-skills.ps1 hook), and guessing from it has produced false "vet-skill
+# isn't installed" reads that derail updates. The installer keys "is this an update?" off the
+# SAME check used here (SKILL.md at $dest), so this report is authoritative, not a heuristic.
+if ($Status) {
+    $skillInstalled = Test-Path (Join-Path $dest 'SKILL.md')
+    Write-Host 'vet-skill status'
+    Write-Host '================'
+    Write-Host ("Skill folder : {0}" -f $(if ($skillInstalled) { "INSTALLED  ($dest)" } else { "not found  ($dest)" }))
+    Write-Host ("Trust anchor : {0}" -f $(if (Test-Path $verifier) { "present    ($verifier)" } else { "MISSING    ($verifier)" }))
+    # Guard hook: mirror step 6's classification - verifier-routed (current) vs direct guard-skills.ps1 (legacy).
+    $settingsFile = Join-Path $HOME '.claude\settings.json'
+    $hookState = 'none'
+    if (Test-Path $settingsFile) {
+        try {
+            $s = Get-Content $settingsFile -Raw | ConvertFrom-Json
+            foreach ($entry in @($s.hooks.PreToolUse)) {
+                foreach ($h in @($entry.hooks)) {
+                    if ($h.command -like '*verify-vet-skill.ps1*') { $hookState = 'verifier-routed (current)' }
+                    elseif ($h.command -like '*guard-skills.ps1*' -and $hookState -eq 'none') { $hookState = 'legacy (direct guard-skills.ps1)' }
+                }
+            }
+        } catch { $hookState = "unreadable ($settingsFile)" }
+    }
+    Write-Host ("Guard hook   : {0}" -f $hookState)
+    Write-Host ''
+    if ($skillInstalled) {
+        Write-Host 'vet-skill IS installed. To update to a reviewed commit, from a git clone checked out at that commit:'
+        Write-Host '  install-vet-skill.ps1 -AllowUpdate <full 40-char sha>'
+        if (-not (Test-Path $verifier) -or $hookState -like 'legacy*') {
+            Write-Host 'This install predates the self-protection hardening (no trust anchor and/or a legacy hook); the update above installs it.'
+        }
+    } else {
+        Write-Host 'vet-skill is NOT installed. For a first install, from a checkout you have read:'
+        Write-Host '  install-vet-skill.ps1'
+    }
+    exit 0
+}
 
 # 1. Copy the skill into this user's Claude Code skills directory.
 #    An existing install is only overwritten when -AllowUpdate names the exact commit

@@ -95,6 +95,7 @@ Both `-ApproveSelf` and `-Restore` require typing a confirmation word at an inte
 
 ### Updating vet-skill after a legitimate new release
 
+0. **Check what's on this machine first:** `powershell -ExecutionPolicy Bypass -File install-vet-skill.ps1 -Status`. This read-only command reports whether the skill is installed, whether the out-of-repo trust anchor exists, and whether the guard hook is the current (verifier-routed) or a legacy (direct `guard-skills.ps1`) one. Use it instead of guessing install state from the file layout — the layout changed across versions, so eyeballing it can wrongly conclude vet-skill isn't installed. An older install (no trust anchor, legacy hook) still updates correctly with the steps below.
 1. See what's pinned: `powershell -File "$env:LOCALAPPDATA\vet-skill-trust\verify-vet-skill.ps1"` prints the approved commit.
 2. **Read the diff on GitHub** between that commit and the new one. This is the actual review — nothing downstream substitutes for it.
 3. Clone fresh and confirm you have exactly what you reviewed: `git clone https://github.com/redlutoprint-svg/vet-skill && git -C vet-skill rev-parse HEAD`.
