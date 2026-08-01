@@ -43,9 +43,15 @@ function Read-Manifest {
     $bytes = [Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String((Get-Content $manifestFile -Raw).Trim()), $null, 'CurrentUser')
     return ([Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json)
 }
+# Written to a temp file in the same directory and renamed over the target. -ApproveSelf
+# repopulates known-good\ BEFORE sealing the manifest, so a write that dies here leaves the
+# two out of sync; renaming keeps the lock-prone freshly-written file out of the target path.
+# Move-Item, not [IO.File]::Move - the .NET Framework overload behind PS 5.1 has no overwrite.
 function Save-Manifest($obj) {
     $bytes = [Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Depth 5))
-    [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($bytes, $null, 'CurrentUser')) | Set-Content $manifestFile -Encoding ascii
+    $tmp = "$manifestFile.tmp"
+    [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($bytes, $null, 'CurrentUser')) | Set-Content $tmp -Encoding ascii
+    Move-Item $tmp $manifestFile -Force
 }
 # Returns $null when no manifest is pinned yet; otherwise the (possibly empty)
 # list of relative paths that are changed, new, or deleted vs. the manifest.
@@ -76,7 +82,15 @@ function Get-DiffText($drift) {
         }
         if (-not (Test-Path $cur)) { $lines += 'FILE DELETED (was present at last approval)'; continue }
         if (-not (Test-Path $good) -or (Get-FileHash $good -Algorithm SHA256).Hash -ne $pinned.Value) {
-            $lines += 'WARNING: the known-good copy itself is missing or does not match the sealed manifest - cannot diff. Re-fetch the version you originally reviewed before trusting anything.'
+            # Two causes, opposite remedies: an -ApproveSelf that repopulated known-good\ but died
+            # before sealing the manifest (known-good is AHEAD - just re-run it), versus known-good
+            # matching nothing (stale or corrupted - treat as suspicious). Saying "cannot diff" for
+            # both sends the benign case looking for a compromise that isn't there.
+            if ((Test-Path $good) -and (Get-FileHash $good -Algorithm SHA256).Hash -eq (Get-FileHash $cur -Algorithm SHA256).Hash) {
+                $lines += 'Known-good matches the CURRENT file but not the sealed manifest - consistent with an -ApproveSelf interrupted before the manifest was written, not with tampering. Re-run -ApproveSelf to finish it.'
+            } else {
+                $lines += 'WARNING: the known-good copy itself is missing or does not match the sealed manifest - cannot diff. Re-fetch the version you originally reviewed before trusting anything.'
+            }
             continue
         }
         if ($git) {

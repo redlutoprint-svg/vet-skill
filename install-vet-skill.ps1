@@ -63,7 +63,13 @@ if ($Status) {
 #    which commit they contain, so updates require a git clone (first install is
 #    trust-on-first-use either way - you read the files, that IS the review).
 $isUpdate = (Test-Path (Join-Path $dest 'SKILL.md')) -and ($PSScriptRoot -ine $dest)
-if ($PSScriptRoot -ieq $dest) {
+if ($AllowUpdate -and $PSScriptRoot -ieq $dest) {
+    # -AllowUpdate asserts "install exactly the commit I reviewed", and from here that cannot
+    # happen: there is nothing to copy FROM and no git history to verify the sha against. Left
+    # to fall through, the run would still re-pin the trust store to that sha (step 3) against
+    # files it never installed - an audit trail that says something untrue. Hard stop instead.
+    Write-Error "-AllowUpdate requires running from a git clone, not the installed location ($dest). Clone the repo, check out the commit you reviewed, and run install-vet-skill.ps1 from there."
+} elseif ($PSScriptRoot -ieq $dest) {
     Write-Host "Already running from $dest - skill files not copied."
 } elseif ($isUpdate -and -not $AllowUpdate) {
     Write-Error "vet-skill is already installed. Updates must name the exact reviewed commit: install-vet-skill.ps1 -AllowUpdate <full sha>. Read the diff since your pinned version first (verify-vet-skill.ps1 shows the pinned commit), then take the sha from 'git rev-parse HEAD' in the clone you reviewed."
