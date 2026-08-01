@@ -18,9 +18,17 @@ $skillsDir = Join-Path $HOME '.claude\skills'
 $baselineFile = Join-Path $skillsDir 'vet-skill\baseline.json'
 $selfVerifier = Join-Path $env:LOCALAPPDATA 'vet-skill-trust\verify-vet-skill.ps1'
 
+# Runtime state written by a unit while it runs - not code, and it changes constantly.
+# ponytail, for example, writes .in_use\<pid> on every session; hashing that flags the
+# plugin as CHANGED every single week for a reason that is never a security event, which
+# is worse than useless: it trains the reviewer to approve that unit without reading.
+# This IS a blind spot - anything dropped in .in_use\ is unhashed - so keep the list
+# narrow, and only for paths a unit writes to itself as scratch state.
+$runtimeStatePattern = '\\\.in_use\\'
+
 function Get-DirHashes($dir) {
     $hashes = @{}
-    Get-ChildItem $dir -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.git\\|\\reports\\|baseline\.json$' } | ForEach-Object {
+    Get-ChildItem $dir -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.git\\|\\reports\\|baseline\.json$' -and $_.FullName -notmatch $runtimeStatePattern } | ForEach-Object {
         $rel = $_.FullName.Substring($dir.Length + 1)
         $hashes[$rel] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
     }
@@ -119,6 +127,7 @@ try {
 
 # --- Audit / weekly check ---
 $safeVerdicts = @()
+$incompleteReviews = @()
 $flagged = @()
 foreach ($k in $units.Keys) {
     if (-not $baselineMap.ContainsKey($k)) { $flagged += @{ name = $k; reason = 'NEW - never vetted' }; continue }
@@ -163,12 +172,39 @@ foreach ($r in $removed) { "REMOVED: $r (was baselined, folder gone - pruned fro
 foreach ($f in $flagged) {
     "FLAGGED: $($f.name) - $($f.reason)" | Add-Content $report
     $dir = $units[$f.name]
-    # Full check layer 1: Cisco scanner
+    # Full check layer 1: Cisco scanner.
+    # The scanner takes ONE skill directory - a dir with a SKILL.md in it. A plugin root
+    # has no SKILL.md (its skills live in skills/<name>/), so pointing the scanner at the
+    # plugin root just errors, and until this fix that error was written to the report as
+    # an empty section while the unit still collected a SAFE verdict from layer 2 alone.
+    # Walk to the actual skill dirs instead, and scan each one.
+    $scanComplete = $false
     $scanner = Get-Command skill-scanner -ErrorAction SilentlyContinue
-    if ($scanner) {
-        "--- skill-scanner: $($f.name) ---" | Add-Content $report
-        & skill-scanner scan $dir | Out-String | Add-Content $report
-    } else { "skill-scanner not on PATH - scanner layer skipped" | Add-Content $report }
+    if (-not $scanner) {
+        "scanner layer SKIPPED - skill-scanner not on PATH" | Add-Content $report
+    } else {
+        $scanTargets = if (Test-Path (Join-Path $dir 'SKILL.md')) { ,$dir } else {
+            @(Get-ChildItem $dir -Recurse -Filter SKILL.md -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch $runtimeStatePattern } |
+                ForEach-Object { $_.Directory.FullName } | Sort-Object -Unique)
+        }
+        if (-not $scanTargets.Count) {
+            "!!! scanner layer INCOMPLETE - no SKILL.md found anywhere under $dir, so there was nothing the scanner could parse" | Add-Content $report
+        } else {
+            $scanComplete = $true
+            foreach ($t in $scanTargets) {
+                "--- skill-scanner: $t ---" | Add-Content $report
+                $scanOut = & skill-scanner scan $t 2>&1 | Out-String
+                $scanOut | Add-Content $report
+                # A real scan always prints a findings summary. Anything else (a load error,
+                # a crash) means this target was NOT scanned, whatever the exit code says.
+                if ($scanOut -notmatch 'Total Findings') {
+                    "!!! scanner layer INCOMPLETE on $t - no findings summary in scanner output" | Add-Content $report
+                    $scanComplete = $false
+                }
+            }
+        }
+    }
     # Full check layer 2: headless Claude vet (judgment layer). Read-only tools only.
     $claude = Get-Command claude -ErrorAction SilentlyContinue
     if ($claude) {
@@ -180,7 +216,11 @@ foreach ($f in $flagged) {
             "judgment layer FAILED (claude exit $LASTEXITCODE) - review this unit manually" | Add-Content $report
         } elseif ($out -match '(?m)^\s*VERDICT_SAFE\s*$') {
             # No auto-approve: a human reads the report and approves explicitly.
-            $safeVerdicts += $f.name
+            # A SAFE verdict from one layer is not the same claim as SAFE from two.
+            # If the scanner never actually ran, say so instead of listing an approve
+            # command that reads as "both layers cleared this".
+            if ($scanComplete) { $safeVerdicts += $f.name }
+            else { $incompleteReviews += $f.name }
         }
     } else { "claude CLI not on PATH - judgment layer skipped, review manually" | Add-Content $report }
 }
@@ -191,5 +231,10 @@ if ($safeVerdicts.Count) {
     $checkScript = Join-Path $skillsDir 'vet-skill\check-skills.ps1'
     foreach ($k in $safeVerdicts) { "  powershell -File `"$checkScript`" -Approve '$k'" | Add-Content $report }
 }
-Write-Host "ATTENTION: $($flagged.Count) unit(s) need review ($($safeVerdicts.Count) got SAFE verdicts - see report for approve commands). Report: $report"
+if ($incompleteReviews.Count) {
+    "`nINCOMPLETE REVIEW - Claude returned SAFE but the scanner layer did not run on these, so only one of two layers actually looked at them. No approve command is offered; check the scanner error above and re-run, or vet them by hand:" | Add-Content $report
+    foreach ($k in $incompleteReviews) { "  $k" | Add-Content $report }
+}
+$tail = if ($incompleteReviews.Count) { ", $($incompleteReviews.Count) INCOMPLETE" } else { '' }
+Write-Host "ATTENTION: $($flagged.Count) unit(s) need review ($($safeVerdicts.Count) got SAFE verdicts - see report for approve commands$tail). Report: $report"
 exit 1
