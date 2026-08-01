@@ -106,11 +106,14 @@ if (-not (Test-Path $verifier)) {
 # 3. Pin the just-installed files as the known-good reference. Interactive on purpose:
 #    typing APPROVE is the human asserting they reviewed exactly this content, and an
 #    agent-driven session (no interactive stdin) cannot complete it.
+$hadPin = Test-Path (Join-Path $trustDir 'manifest.bin')
 if ($AllowUpdate) { & $verifier -ApproveSelf -PinnedCommit $AllowUpdate } else { & $verifier -ApproveSelf }
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning 'Trust store NOT pinned - the guard hook and weekly check will refuse to run vet-skill scripts until you run:'
-    Write-Warning "  powershell -File `"$verifier`" -ApproveSelf"
-}
+$pinFailed = $LASTEXITCODE -ne 0
+# Deliberately terse here: steps 4-7 print pages of pip, scanner and drift-report output after
+# this point, so a warning raised now scrolls off the top and gets missed - which is how a run
+# ends "successfully" with the files updated and the pin still naming the previous approval.
+# The actionable version is repeated as the LAST thing the installer prints.
+if ($pinFailed) { Write-Warning 'Trust store NOT pinned (see the message just above) - continuing with the rest of the install.' }
 
 # 4. Install the automated scanner (needs Python 3.10+)
 $pip = Get-Command pip -ErrorAction SilentlyContinue
@@ -197,5 +200,16 @@ Register-ScheduledTask -TaskName 'vet-skill-weekly-check' -Action $taskAction -T
 Write-Host 'Weekly drift check scheduled (Mondays 9:00; a run missed while the machine was off runs at next startup), gated by the integrity verifier. Reports land in skills\vet-skill\reports\, alarms in the trust folder.'
 
 Write-Host ''
+if ($pinFailed) {
+    Write-Warning '!!! TRUST STORE NOT PINNED - THIS INSTALL IS NOT FINISHED !!!'
+    if ($hadPin) {
+        Write-Warning 'The skill files were updated but the pin still records the PREVIOUS approval, so the trust store now names a commit that these files do not match. Re-pin with:'
+    } else {
+        Write-Warning 'Nothing is pinned, so the guard hook and the weekly check will refuse to run any vet-skill script until you pin:'
+    }
+    Write-Warning "  powershell -File `"$verifier`" -ApproveSelf$(if ($AllowUpdate) { " -PinnedCommit $AllowUpdate" })"
+    Write-Warning 'The approval word is case-sensitive: type APPROVE in capitals.'
+    Write-Host ''
+}
 Write-Host 'Done. In Claude Code, vet any skill BEFORE installing it with:'
 Write-Host '  /vet-skill <path or URL>'
