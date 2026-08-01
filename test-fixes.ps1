@@ -36,6 +36,11 @@ Check 'errors instead of silently no-opping' ($out -match 'requires running from
 Check 'does NOT print the old "not copied" no-op line' ($out -notmatch 'skill files not copied') $out.Trim()
 Check 'never reached the trust-pin step' (-not (Test-Path (Join-Path $fakeLocal 'vet-skill-trust'))) 'trust dir was created - it should not have been'
 
+# Only the installer paths that exit early are exercised here. A full installer run is not
+# sandboxable: step 4 pip-installs, and step 7 calls Register-ScheduledTask, which would clobber
+# the machine's real vet-skill-weekly-check task with one pointing into this sandbox. The
+# end-of-run "TRUST STORE NOT PINNED" warning is therefore covered by the verifier-level checks
+# below (which decide when it fires) plus review, not end to end.
 Write-Host "`n=== #2 control: -Status still works read-only ==="
 $out = Run (Join-Path $fakeSkill 'install-vet-skill.ps1') '-Status'
 Check '-Status reports INSTALLED' ($out -match 'Skill folder : INSTALLED') $out.Trim()
@@ -48,6 +53,36 @@ Check 'approve succeeded' ($out -match 'Pinned \d+ files') $out.Trim()
 Check 'manifest.bin exists' (Test-Path $manifest)
 Check 'no .tmp left behind' (-not (Test-Path "$manifest.tmp"))
 Check 'baseline.json got the vet-skill entry' (Test-Path (Join-Path $fakeSkill 'baseline.json'))
+
+Write-Host "`n=== re-pin over an EXISTING manifest, and near-miss confirmations ==="
+# The install path that actually bit: files already pinned, re-approving only to refresh the
+# recorded commit. Not covered by the first pin above - that one had no manifest to overwrite.
+Add-Type -AssemblyName System.Security
+function Get-PinnedCommit {
+    $b = [Security.Cryptography.ProtectedData]::Unprotect(
+        [Convert]::FromBase64String((Get-Content $manifest -Raw).Trim()), $null, 'CurrentUser')
+    return (([Text.Encoding]::UTF8.GetString($b) | ConvertFrom-Json).pinnedCommit)
+}
+$out = Run $verifier '-ApproveSelf -PinnedCommit bbbb2222' 'APPROVE'
+Check 'says it is refreshing an existing pin' ($out -match 'Files already match the pinned trust store') $out.Trim()
+Check 're-pin rewrote pinnedCommit' ((Get-PinnedCommit) -eq 'bbbb2222') "got $(Get-PinnedCommit)"
+Check 're-pin left no .tmp behind' (-not (Test-Path "$manifest.tmp"))
+
+$out = Run $verifier '-ApproveSelf -PinnedCommit cccc3333' 'approve'
+Check "lower-case 'approve' pins nothing" ((Get-PinnedCommit) -eq 'bbbb2222') "got $(Get-PinnedCommit)"
+Check "lower-case 'approve' says the word is case-sensitive" ($out -match 'case-sensitive') $out.Trim()
+Check "lower-case 'approve' is not reported as a plain refusal" ($out -notmatch 'Not approved') $out.Trim()
+
+$out = Run $verifier '-ApproveSelf -PinnedCommit dddd4444' 'no'
+Check 'an actual refusal still reads as a refusal' ($out -match 'Not approved - nothing pinned') $out.Trim()
+Check 'refusal pins nothing' ((Get-PinnedCommit) -eq 'bbbb2222') "got $(Get-PinnedCommit)"
+
+$out = Run $verifier '-Restore' 'restore'
+Check "lower-case 'restore' says the word is case-sensitive" ($out -match 'case-sensitive') $out.Trim()
+
+# Restore the expected pin for the sections below.
+$out = Run $verifier '-ApproveSelf' 'APPROVE'
+Check 'sandbox re-pinned for the remaining tests' ($out -match 'Pinned \d+ files') $out.Trim()
 
 Write-Host "`n=== #3: clean integrity check reads OK ==="
 $out = Run $verifier ''

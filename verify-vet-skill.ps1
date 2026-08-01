@@ -135,7 +135,15 @@ if ($ApproveSelf) {
         Write-Host 'Files already match the pinned trust store (re-pinning refreshes the timestamp/commit).'
     }
     $ans = Read-Host 'Type APPROVE to pin the current vet-skill files as trusted'
-    if ($ans -cne 'APPROVE') { Write-Host 'Not approved - nothing pinned.'; exit 1 }
+    # Case-sensitive on purpose: typing the word in capitals is the deliberate gesture, and
+    # loosening that would make an accidental keypress enough to pin. But answering "approve"
+    # in lower case is a near-miss, not a refusal, and one message for both left people believing
+    # they had approved - so say which of the two just happened.
+    if ($ans -cne 'APPROVE') {
+        if ($ans -ieq 'APPROVE') { Write-Host 'NOTHING PINNED: the approval word is case-sensitive - type APPROVE in capitals.' }
+        else { Write-Host 'Not approved - nothing pinned.' }
+        exit 1
+    }
     New-Item -ItemType Directory -Force -Path $trustDir, $goodDir | Out-Null
     Get-ChildItem $goodDir -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force
     $hashes = Get-SkillHashes
@@ -171,7 +179,11 @@ if ($Restore) {
         }
     }
     $ans = Read-Host "Type RESTORE to overwrite $skillDir with the pinned known-good files"
-    if ($ans -cne 'RESTORE') { Write-Host 'Cancelled.'; exit 1 }
+    if ($ans -cne 'RESTORE') {
+        if ($ans -ieq 'RESTORE') { Write-Host 'NOTHING RESTORED: the confirmation word is case-sensitive - type RESTORE in capitals.' }
+        else { Write-Host 'Cancelled.' }
+        exit 1
+    }
     Get-SkillFiles | Where-Object { $manifest.files.PSObject.Properties.Name -notcontains $_.FullName.Substring($skillDir.Length + 1) } | Remove-Item -Force
     foreach ($p in $manifest.files.PSObject.Properties) {
         $dst = Join-Path $skillDir $p.Name
