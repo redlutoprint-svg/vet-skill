@@ -13,6 +13,7 @@ Claude Code skills are instructions and scripts that Claude follows automaticall
 | `check-skills.ps1` | Baseline + weekly drift check — flags skills installed or changed without vetting |
 | `verify-vet-skill.ps1` | Integrity gate for vet-skill ITSELF — installed outside the repo, checks every vet-skill file against an out-of-repo pinned baseline before any other script runs |
 | `install-vet-skill.ps1` | Installer (Windows): skill, scanner, hook, weekly task, trust anchor. Re-runs refuse to update unless pinned to a reviewed commit |
+| `test-check-skills.ps1` | Self-check for the drift checker — builds a throwaway skill tree in `%TEMP%` and asserts the checker flags what it should and stays quiet about what it shouldn't. Run it after changing `check-skills.ps1` |
 | `README.md` | This file |
 
 ## Install (once per machine)
