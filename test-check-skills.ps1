@@ -76,5 +76,86 @@ Check 'SAFE + unscannable unit is NOT offered an approve command' ($approveBlock
 Check 'unscannable unit listed under INCOMPLETE REVIEW' ($body4 -match '(?s)INCOMPLETE REVIEW.*noskill') 'noskill missing from the INCOMPLETE block'
 Check 'incomplete count surfaced on the console line' ($out4 -match 'INCOMPLETE') "console said: $($out4.Trim())"
 
+# --- 5. guard hook asks (does not hard-block) ------------------------------------
+# The hook's contract is stdin JSON in, decision JSON out. Pipe-test it directly.
+$guard = Join-Path $PSScriptRoot 'guard-skills.ps1'
+$errs5 = $null
+[void][System.Management.Automation.Language.Parser]::ParseFile($guard, [ref]$null, [ref]$errs5)
+Check 'guard-skills.ps1 parses' (-not $errs5) "$($errs5 | Select-Object -First 3)"
+
+function Invoke-Guard($path) {
+    $payload = @{ tool_input = @{ file_path = $path } } | ConvertTo-Json -Compress
+    $out = $payload | & powershell -NoProfile -File $guard 2>&1 | Out-String
+    [pscustomobject]@{ Out = $out; Code = $LASTEXITCODE }
+}
+
+$g1 = Invoke-Guard (Join-Path $skills 'brand-new-skill\SKILL.md')
+Check 'guard exits 0 for an unvetted skill (no hard block)' ($g1.Code -eq 0) "exit code was $($g1.Code)"
+Check 'guard asks rather than denies' ($g1.Out -match '"permissionDecision"\s*:\s*"ask"') "guard emitted: $($g1.Out.Trim())"
+Check 'guard names the offending skill' ($g1.Out -match 'brand-new-skill') "guard emitted: $($g1.Out.Trim())"
+
+$g2 = Invoke-Guard (Join-Path $skills 'vet-skill\SKILL.md')
+Check 'guard stays silent for a baselined skill' ($g2.Out -notmatch 'permissionDecision') "guard emitted: $($g2.Out.Trim())"
+
+$g3 = Invoke-Guard (Join-Path $fake 'some\other\project\file.txt')
+Check 'guard ignores paths outside the skills dir' ($g3.Out -notmatch 'permissionDecision') "guard emitted: $($g3.Out.Trim())"
+
+# --- 6. self-check and self-update over a real git remote ------------------------
+# Rebuild the vet-skill fixture as a clone of a local bare repo, so the fast-forward
+# path runs for real rather than being mocked.
+# git chatters on stderr (CRLF notices, "cloned an empty repository"), and under
+# $ErrorActionPreference='Stop' PS 5.1 promotes native stderr to a terminating error.
+# Run git through a wrapper that swallows it; real failures still show up as bad state.
+function Git-Quiet {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & git @args 2>&1 | Out-Null } finally { $ErrorActionPreference = $old }
+}
+
+$vetFix = Join-Path $skills 'vet-skill'
+$bare   = Join-Path $work 'origin.git'
+$seed   = Join-Path $work 'seed'
+foreach ($p in $bare, $seed) { if (Test-Path $p) { Remove-Item $p -Recurse -Force } }
+Git-Quiet init --quiet --bare $bare
+Git-Quiet clone --quiet $bare $seed
+Copy-Item $script (Join-Path $seed 'check-skills.ps1')
+# Real frontmatter: the scanner rejects a SKILL.md with no 'name' field, which would
+# make this fixture INCOMPLETE for a reason that has nothing to do with what is tested.
+"---`nname: vet-skill`ndescription: fixture skill for tests`n---`nFixture." | Set-Content (Join-Path $seed 'SKILL.md')
+"baseline.json`nreports/" | Set-Content (Join-Path $seed '.gitignore')
+Git-Quiet -C $seed add -A
+Git-Quiet -C $seed -c user.email=t@t -c user.name=t commit --quiet -m 'seed'
+Git-Quiet -C $seed push --quiet origin HEAD:refs/heads/master
+
+$oldBaseline = Get-Content (Join-Path $vetFix 'baseline.json') -Raw
+Remove-Item $vetFix -Recurse -Force
+Git-Quiet clone --quiet -b master $bare $vetFix
+$oldBaseline | Set-Content (Join-Path $vetFix 'baseline.json')
+
+$out6 = Run-Checker
+Check 'clean checkout reports its version' ($out6 -notmatch 'LOCAL EDITS') "checker said: $($out6.Trim())"
+
+# a commit lands upstream -> the monthly run should fast-forward onto it
+'Upstream change.' | Add-Content (Join-Path $seed 'SKILL.md')
+Git-Quiet -C $seed add -A
+Git-Quiet -C $seed -c user.email=t@t -c user.name=t commit --quiet -m 'upstream fix'
+Git-Quiet -C $seed push --quiet origin master
+$out7 = Run-Checker
+Check 'self-update fast-forwards from origin' ($out7 -match 'UPDATED: vet-skill') "checker said: $($out7.Trim())"
+$head = (& git -C $vetFix log -1 --pretty=%s).Trim()
+Check 'the update actually landed on disk' ($head -eq 'upstream fix') "HEAD subject was '$head'"
+# and must not then flag itself as drifted on the very next run
+$out8 = Run-Checker
+Check 'updated tool does not flag itself as CHANGED' ($out8 -notmatch 'vet-skill - CHANGED') "checker said: $($out8.Trim())"
+
+# local edits are reported but must NOT stop the audit (the old halt is gone)
+'# tampered locally' | Add-Content (Join-Path $vetFix 'SKILL.md')
+'# drift' | Add-Content (Join-Path $plug 'skills\alpha\SKILL.md')
+$out9 = Run-Checker
+Check 'local edits to vet-skill are reported' ($out9 -match 'LOCAL EDITS') "checker said: $($out9.Trim())"
+Check 'audit still runs despite local edits (no halt)' ($out9 -match 'need review') "checker said: $($out9.Trim())"
+$rpt9 = Get-ChildItem (Join-Path $vetFix 'reports') | Sort-Object LastWriteTime -Desc | Select-Object -First 1
+Check 'other units still scanned despite local edits' ((Get-Content $rpt9.FullName -Raw) -match 'skill-scanner:') 'no scanner section - the run halted early'
+
 Write-Host ''
 if ($fails) { Write-Host "$fails FAILED"; exit 1 } else { Write-Host 'all checks passed'; exit 0 }
