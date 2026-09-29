@@ -111,15 +111,16 @@ $updateNotice = $null
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $repoRaw = 'https://raw.githubusercontent.com/redlutoprint-svg/vet-skill/master'
-    foreach ($f in 'SKILL.md', 'check-skills.ps1', 'guard-skills.ps1', 'install-vet-skill.ps1', 'verify-vet-skill.ps1', 'README.md') {
+    foreach ($f in 'SKILL.md', 'check-skills.ps1', 'guard-skills.ps1', 'install-vet-skill.ps1', 'verify-vet-skill.ps1', 'README.md', 'PROCESS.md') {
         $localPath = Join-Path $skillsDir "vet-skill\$f"
         if (-not (Test-Path $localPath)) { continue }  # missing files are the drift check's job, not the update notice's
         $remote = (Invoke-WebRequest "$repoRaw/$f" -UseBasicParsing -TimeoutSec 15).Content -replace "`r`n", "`n"
         $local = (Get-Content $localPath -Raw -Encoding UTF8) -replace "`r`n", "`n"
         if ($remote.TrimEnd("`n") -ne $local.TrimEnd("`n")) {
-            # Deliberately does NOT say "re-run the installer": if the repo is compromised,
-            # that advice installs the compromise. Updates are pinned to a reviewed commit.
-            $updateNotice = "UPDATE AVAILABLE: vet-skill '$f' differs from the GitHub repo. Do NOT blindly pull or re-run the installer - the repo could be compromised. Read the diff on GitHub first, then: git clone the repo, confirm 'git rev-parse HEAD' equals the commit you reviewed, and run install-vet-skill.ps1 -AllowUpdate <that sha>."
+            # Deliberately does NOT auto-apply or say "just re-run the installer blindly":
+            # if the repo is compromised, that would install the compromise. Every update is
+            # gated by the human APPROVE (or an -AllowUpdate commit pin), so read the diff first.
+            $updateNotice = "UPDATE AVAILABLE: vet-skill '$f' differs from the GitHub repo. Do NOT blindly pull - the repo could be compromised. Read the diff on GitHub first (https://github.com/redlutoprint-svg/vet-skill/commits/master), then update with: install-vet-skill.ps1 -Update (fetches over HTTPS, no git; you review the changed files and type APPROVE). For git-backed provenance instead, clone, confirm 'git rev-parse HEAD' equals the reviewed commit, and run install-vet-skill.ps1 -AllowUpdate <that sha>."
             break
         }
     }
